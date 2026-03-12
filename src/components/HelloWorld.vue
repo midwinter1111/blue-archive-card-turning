@@ -4,16 +4,25 @@ import { ref, computed, onMounted } from 'vue';
 const ROWS = 5;
 const COLS = 9;
 
+// アイテムの定義（アセット画像に合わせて修正）
 const ITEM_TYPES = [
-  { id: 'item-lg', name: 'ROBOT BOX', width: 3, height: 2 },
-  { id: 'item-md', name: 'STATIONERY', width: 3, height: 1 },
-  { id: 'item-sm', name: 'USB', width: 2, height: 1 },
+  { id: 'item-lg', name: 'ノート', width: 3, height: 2, image: '2x3note.png' },
+  { id: 'item-md', name: '銃', width: 3, height: 1, image: '1x3weapon.png' },
+  { id: 'item-sm', name: 'アイテム', width: 2, height: 1, image: '1x2item.png' },
 ];
 
 const board = ref([]);
 const selectedCells = ref([]);
 const isCleared = ref(false);
 const placedItems = ref([]);
+
+// パネルの色を斜めに配置するロジック
+const getCellColor = (r, c) => {
+  const colors = ['#b8e1ff', '#fff4ad', '#f5b8ff']; // 青, 黄, 桃
+  // (r + c) の代わりに (c - r) を使うことで左上から右下への斜めラインを作る
+  // 負の数対策で +ROWS を加算
+  return colors[(c - r + ROWS) % 3];
+};
 
 const initBoard = () => {
   isCleared.value = false;
@@ -31,7 +40,8 @@ const initBoard = () => {
         typeId: null,
         originR: 0,
         originC: 0,
-        color: ['#fff4ad', '#b8e1ff', '#f5b8ff', '#d1e0ff'][Math.floor(Math.random() * 4)]
+        isRotated: false,
+        color: getCellColor(r, c)
       });
     }
     newBoard.push(row);
@@ -87,43 +97,44 @@ const registerItem = (row, col, type, instanceId, rotate) => {
       cell.typeId = type.id;
       cell.originR = dr;
       cell.originC = dc;
+      cell.isRotated = rotate;
       cells.push({ r: row + dr, c: col + dc });
     }
   }
-  placedItems.value.push({ id: instanceId, typeId: type.id, name: type.name, cells, width: finalWidth, height: finalHeight });
+  placedItems.value.push({
+    id: instanceId,
+    typeId: type.id,
+    name: type.name,
+    cells,
+    width: finalWidth,
+    height: finalHeight,
+    originalType: type // 画像パス参照用
+  });
 };
 
-const getFragmentText = (cell) => {
-  const { typeId, originR, originC } = cell;
+// 画像の背景スタイルを計算
+const getItemImageStyle = (cell) => {
   const item = placedItems.value.find(i => i.id === cell.itemId);
-  if (!item) return '';
+  if (!item) return {};
 
-  const w = item.width;
-  const h = item.height;
+  const { originR, originC, isRotated } = cell;
+  const type = item.originalType;
 
-  if (typeId === 'item-md') {
-    if (w > h) {
-      if (originC === 0) return '✎';
-      if (originC === w - 1) return '目';
-      return '＝';
-    } else {
-      if (originR === 0) return '▲';
-      if (originR === h - 1) return '目';
-      return '┃';
-    }
-  }
-  if (typeId === 'item-sm') {
-    if (w > h) return originC === 0 ? '▤' : '▶';
-    else return originR === 0 ? '▤' : '▼';
-  }
-  if (typeId === 'item-lg') {
-    if (originR === 0 && originC === 0) return '┏';
-    if (originR === 0 && originC === w - 1) return '┓';
-    if (originR === h - 1 && originC === 0) return '┗';
-    if (originR === h - 1 && originC === w - 1) return '┛';
-    return '🤖';
-  }
-  return '？';
+  // 背景画像の表示倍率と位置を計算
+  // 1マスを100%として、アイテムの全サイズ分（width x height）の背景サイズを設定
+  const bgSizeW = (isRotated ? type.height : type.width) * 100;
+  const bgSizeH = (isRotated ? type.width : type.height) * 100;
+  const posX = (originC / ((isRotated ? type.height : type.width) - 1 || 1)) * 100;
+  const posY = (originR / ((isRotated ? type.width : type.height) - 1 || 1)) * 100;
+
+  return {
+    backgroundImage: `url(/src/assets/${type.image})`,
+    backgroundSize: `${bgSizeW}% ${bgSizeH}%`,
+    backgroundPosition: `${posX}% ${posY}%`,
+    // 回転している場合は画像自体を回転させる（必要に応じて）
+    transform: isRotated ? 'rotate(0deg)' : 'rotate(0deg)',
+    backgroundRepeat: 'no-repeat'
+  };
 };
 
 const itemStatusList = computed(() => {
@@ -136,6 +147,7 @@ const itemStatusList = computed(() => {
   });
 });
 
+const totalCells = ROWS * COLS;
 const openedCount = computed(() => board.value.flat().filter(c => c.isOpen).length);
 const remainingItemsCount = computed(() => {
   return itemStatusList.value.reduce((acc, curr) => acc + curr.remaining, 0);
@@ -167,7 +179,7 @@ onMounted(() => initBoard());
   <div class="game-container">
     <div class="header">
       <div class="info-row">
-        <span>{{ openedCount }}マスオープン / {{ ROWS * COLS }}マス</span>
+        <span>残りマス数：{{ totalCells - openedCount }}/{{ totalCells }}</span>
       </div>
     </div>
 
@@ -185,9 +197,11 @@ onMounted(() => initBoard());
           :style="{ backgroundColor: cell.isOpen ? 'transparent' : cell.color }"
           @click="toggleCellSelection(r, c)"
         >
-          <div v-if="cell.isOpen && cell.isItem" class="item-fragment">
-            <span class="fragment-text">{{ getFragmentText(cell) }}</span>
-          </div>
+          <div
+            v-if="cell.isOpen && cell.isItem"
+            class="item-image-fragment"
+            :style="getItemImageStyle(cell)"
+          ></div>
           <div v-if="!cell.isOpen" class="corner"></div>
         </div>
       </div>
@@ -228,12 +242,17 @@ onMounted(() => initBoard());
 .row { display: flex; gap: 4px; }
 .cell {
   width: 45px; height: 45px; position: relative; cursor: pointer; border-radius: 2px;
-  display: flex; align-items: center; justify-content: center; font-size: 1.2rem;
+  display: flex; align-items: center; justify-content: center;
   transition: all 0.2s ease;
 }
 .cell.is-selected { outline: 3px solid #4a90e2; z-index: 5; transform: scale(1.1); box-shadow: 0 0 10px rgba(74, 144, 226, 0.5); }
-.cell.has-item { background-color: #f0f7ff !important; border: 1px solid #c1d5f0; color: #4a90e2; font-weight: bold; }
+.cell.has-item { background-color: #fff !important; overflow: hidden; }
 .cell.is-open { background-color: #fafafa !important; }
+
+.item-image-fragment {
+  width: 100%;
+  height: 100%;
+}
 
 .item-catalog { display: flex; gap: 12px; margin: 20px 0; padding: 15px; background: #fff; border-radius: 8px; border: 1px dashed #ccd6e0; flex-wrap: wrap; justify-content: center; }
 .catalog-card { display: flex; align-items: center; gap: 12px; padding: 8px 15px; background: #fdfdfd; border: 1px solid #eee; border-radius: 4px; min-width: 120px; }
